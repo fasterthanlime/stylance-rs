@@ -7,12 +7,13 @@ use quote::{quote, quote_spanned};
 use syn::{parse_macro_input, LitStr};
 
 fn try_import_style_classes_with_path(
-    manifest_path: &Path,
+    config_path: &Path,
+    base_path: &Path,
     file_path: &Path,
     identifier_span: Span,
 ) -> anyhow::Result<TokenStream> {
-    let config = stylance_core::load_config(manifest_path)?;
-    let (_, classes) = stylance_core::get_classes(manifest_path, file_path, &config)?;
+    let config = stylance_core::load_config(config_path)?;
+    let (_, classes) = stylance_core::get_classes(base_path, file_path, &config)?;
 
     let binding = file_path.canonicalize().unwrap();
     let full_path = binding.to_string_lossy();
@@ -43,7 +44,7 @@ fn try_import_style_classes(input: &LitStr) -> anyhow::Result<TokenStream> {
     let manifest_path = Path::new(&manifest_dir_env);
     let file_path = manifest_path.join(Path::new(&input.value()));
 
-    try_import_style_classes_with_path(manifest_path, &file_path, input.span())
+    try_import_style_classes_with_path(manifest_path, manifest_path, &file_path, input.span())
 }
 
 #[proc_macro]
@@ -75,7 +76,36 @@ fn try_import_style_classes_rel(input: &LitStr) -> anyhow::Result<TokenStream> {
         .expect("Macro source path should have a parent dir")
         .join(input.value());
 
-    try_import_style_classes_with_path(manifest_path, &css_path, input.span())
+    // In build systems like Buck2, sources may be copied to a different location
+    // (e.g., buck-out/.../__srcs/src/foo.rs). In this case, the CSS file won't be under
+    // CARGO_MANIFEST_DIR. We detect this and find a suitable base path by looking for
+    // a directory named "__srcs" in the css_path ancestors, which is Buck2's convention
+    // for the source root.
+    //
+    // We use the original manifest_path for config loading (Cargo.toml), but the
+    // effective base path for CSS file resolution and hash computation.
+    let effective_base_path = if let Ok(canonical_css) = css_path.canonicalize() {
+        if let Ok(canonical_manifest) = manifest_path.canonicalize() {
+            if canonical_css.starts_with(&canonical_manifest) {
+                // CSS file is under manifest_path, use it directly
+                manifest_path.to_path_buf()
+            } else {
+                // CSS file is outside manifest_path (e.g., Buck2 build)
+                // Look for __srcs directory in ancestors as the effective root
+                canonical_css
+                    .ancestors()
+                    .find(|p| p.file_name().map(|n| n == "__srcs").unwrap_or(false))
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| manifest_path.to_path_buf())
+            }
+        } else {
+            manifest_path.to_path_buf()
+        }
+    } else {
+        manifest_path.to_path_buf()
+    };
+
+    try_import_style_classes_with_path(manifest_path, &effective_base_path, &css_path, input.span())
 }
 
 #[proc_macro]
