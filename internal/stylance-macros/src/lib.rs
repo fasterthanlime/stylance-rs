@@ -65,15 +65,6 @@ fn try_import_style_classes_rel(input: &LitStr) -> anyhow::Result<TokenStream> {
     let manifest_path = Path::new(&manifest_dir_env);
 
     let Some(source_path) = input.span().unwrap().local_file() else {
-        // rust-analyzer returns None here, so we check for that specifically.
-        // For actual builds, we want to error if local_file() is unavailable.
-        if std::env::var("RA_RUSTC_WRAPPER").is_ok()
-            || std::env::var("RUST_ANALYZER").is_ok()
-            || std::env::var("CARGO").map(|v| v.contains("rust-analyzer")).unwrap_or(false)
-        {
-            // Rust analyzer - bail silently
-            return Ok(TokenStream::new());
-        }
         // Real build - this shouldn't happen, error out
         anyhow::bail!(
             "import_style! could not determine source file location. \
