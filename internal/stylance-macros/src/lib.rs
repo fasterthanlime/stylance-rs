@@ -65,10 +65,22 @@ fn try_import_style_classes_rel(input: &LitStr) -> anyhow::Result<TokenStream> {
     let manifest_path = Path::new(&manifest_dir_env);
 
     let Some(source_path) = input.span().unwrap().local_file() else {
-        // It would make sense to error here but currently rust analyzer is returning None when
-        // the normal build would return the path.
-        // For this reason we bail silently creating no code.
-        return Ok(TokenStream::new());
+        // rust-analyzer returns None here, so we check for that specifically.
+        // For actual builds, we want to error if local_file() is unavailable.
+        if std::env::var("RA_RUSTC_WRAPPER").is_ok()
+            || std::env::var("RUST_ANALYZER").is_ok()
+            || std::env::var("CARGO").map(|v| v.contains("rust-analyzer")).unwrap_or(false)
+        {
+            // Rust analyzer - bail silently
+            return Ok(TokenStream::new());
+        }
+        // Real build - this shouldn't happen, error out
+        anyhow::bail!(
+            "import_style! could not determine source file location. \
+             CARGO_MANIFEST_DIR={:?}, span location unavailable. \
+             This may indicate a build system issue.",
+            manifest_dir_env
+        );
     };
 
     let css_path = source_path
